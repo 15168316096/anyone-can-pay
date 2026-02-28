@@ -21,11 +21,8 @@
 #include "secp256k1_helper.h"
 #include "secp256k1_lock.h"
 
-#define BLAKE2B_BLOCK_SIZE 32
-#define SCRIPT_SIZE 32768
 #define CKB_LEN 8
 #define UDT_LEN 16
-#define MAX_WITNESS_SIZE 32768
 #define MAX_TYPE_HASH 256
 
 /* anyone can pay errors */
@@ -118,7 +115,7 @@ int check_payment_unlock(uint64_t min_ckb_amount, uint128_t min_udt_amount) {
   }
 
   /* iterate inputs and find input wallet cell */
-  int i = 0;
+  uint64_t i = 0;
   len = BLAKE2B_BLOCK_SIZE;
   while (1) {
     if (i >= MAX_TYPE_HASH) {
@@ -138,7 +135,7 @@ int check_payment_unlock(uint64_t min_ckb_amount, uint128_t min_udt_amount) {
     i++;
   }
 
-  int input_wallets_cnt = i;
+  uint64_t input_wallets_cnt = i;
 
   /* iterate outputs wallet cell */
   i = 0;
@@ -182,7 +179,7 @@ int check_payment_unlock(uint64_t min_ckb_amount, uint128_t min_udt_amount) {
 
     /* find input wallet which has same type hash */
     int found_inputs = 0;
-    for (int j = 0; j < input_wallets_cnt; j++) {
+    for (uint64_t j = 0; j < input_wallets_cnt; j++) {
       int has_same_type = 0;
       /* check type hash */
       if (is_ckb_only) {
@@ -238,7 +235,7 @@ int check_payment_unlock(uint64_t min_ckb_amount, uint128_t min_udt_amount) {
   }
 
   /* check inputs wallet, one input should pair with one output */
-  for (int j = 0; j < input_wallets_cnt; j++) {
+  for (uint64_t j = 0; j < input_wallets_cnt; j++) {
     if (input_wallets[j].output_cnt == 0) {
       return ERROR_NO_PAIR;
     } else if (input_wallets[j].output_cnt > 1) {

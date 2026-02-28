@@ -30,9 +30,9 @@ int main(int argc, char* argv[]) {
 
   fprintf(fp, "#ifndef CKB_SECP256K1_DATA_INFO_H_\n");
   fprintf(fp, "#define CKB_SECP256K1_DATA_INFO_H_\n");
-  fprintf(fp, "#define CKB_SECP256K1_DATA_SIZE %ld\n", pre_size + pre128_size);
-  fprintf(fp, "#define CKB_SECP256K1_DATA_PRE_SIZE %ld\n", pre_size);
-  fprintf(fp, "#define CKB_SECP256K1_DATA_PRE128_SIZE %ld\n", pre128_size);
+  fprintf(fp, "#define CKB_SECP256K1_DATA_SIZE %zu\n", pre_size + pre128_size);
+  fprintf(fp, "#define CKB_SECP256K1_DATA_PRE_SIZE %zu\n", pre_size);
+  fprintf(fp, "#define CKB_SECP256K1_DATA_PRE128_SIZE %zu\n", pre128_size);
 
   blake2b_state blake2b_ctx;
   uint8_t hash[32];
