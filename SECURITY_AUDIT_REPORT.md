@@ -84,7 +84,7 @@ anyone-can-pay 是 CKB（Nervos Network）上的一个 Lock Script，实现了"�
 
 虽然该逻辑包含了防盗保护（未满足条件的币种金额必须保持不变），但 OR 语义可能与用户（cell 所有者）的预期不符。
 
-> **RFC-0026 合规性说明**：RFC-0026 规则 2.g 明确规定 "Note only one minimum needs to be matched if both CKByte minimum and UDT minimum are set"，因此 OR 逻辑是**符合规范**的设计决策，而非实现错误。代码中注释 `fail if can't meet both conditions` 与 RFC 和实际逻辑不一致。
+> **RFC-0026 合规性说明**：RFC-0026 规则 2.g 明确规定 "Note only one minimum needs to be matched if both CKByte minimum and UDT minimum are set"，因此 OR 逻辑是**符合规范**的设计决策，而非实现错误。代码中注释 `fail if can't meet both conditions` 与 RFC 和实际逻辑不一致（参见下方修复建议 #1）。
 
 #### 关键代码引用
 
