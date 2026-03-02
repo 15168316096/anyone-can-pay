@@ -1,8 +1,10 @@
 # ckb-anyone-can-pay
 
+[中文文档](README_CN.md)
+
 CKB anyone-can-pay lock.
 
-[RFC Draft](https://talk.nervos.org/t/rfc-anyone-can-pay-lock/4438)
+[RFC-0026: Anyone-Can-Pay Lock](https://github.com/nervosnetwork/rfcs/blob/master/rfcs/0026-anyone-can-pay/0026-anyone-can-pay.md) | [RFC Draft Discussion](https://talk.nervos.org/t/rfc-anyone-can-pay-lock/4438)
 
 ## Build
 
@@ -92,3 +94,10 @@ Cell {
 The owner can provide a secp256k1 signature to unlock the cell, the signature method is the same as the [P2PH](https://github.com/nervosnetwork/ckb-system-scripts/wiki/How-to-sign-transaction#p2ph).
 
 Unlock a cell with a signature has no restrictions, which helps owner to manage the cell as he wants.
+
+## Security Audit
+
+This repository includes a security audit report against the [RFC-0026](https://github.com/nervosnetwork/rfcs/blob/master/rfcs/0026-anyone-can-pay/0026-anyone-can-pay.md) specification:
+
+- [Security Audit Report](SECURITY_AUDIT_REPORT.md) — Full audit report with RFC-0026 rule-by-rule compliance analysis
+- [Audit Checklist](SECURITY_AUDIT_TODO.md) — 30 audit items and their results
