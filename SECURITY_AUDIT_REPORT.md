@@ -21,14 +21,25 @@ anyone-can-pay 是 CKB（Nervos Network）上的一个 Lock Script，实现了"�
 1. **签名解锁**：所有者通过 secp256k1 签名解锁，无任何限制
 2. **支付解锁**：任何人无需签名即可解锁，但必须在输出中创建一个相同 lock hash 和 type hash 的 cell，且金额不减少（满足最低增加量要求）
 
+### 参考规范
+
+| 项目 | 详情 |
+|------|------|
+| RFC 编号 | [RFC-0026: Anyone-Can-Pay Lock](https://github.com/nervosnetwork/rfcs/blob/master/rfcs/0026-anyone-can-pay/0026-anyone-can-pay.md) |
+| RFC 状态 | Proposal |
+| RFC 作者 | Xuejie Xiao |
+| 参考实现 | [ckb-production-scripts@e570c11](https://github.com/nervosnetwork/ckb-production-scripts/blob/e570c11aff3eca12a47237c21598429088c610d5/c/anyone_can_pay.c) |
+| 主网部署 | Lina (code_hash: `0xd369597ff47f29fbc0d47d2e3775370d1250b85140c670e4718af712983a2354`) |
+| 测试网部署 | Aggron (code_hash: `0x3419a1c09eb2567f6552ee7a8ecffd64155cffe0f1796e6e61ec088d740c1356`) |
+
 ### 关键数字
 | 指标 | 数值 |
 |------|------|
 | C 源文件 | 8 个 (`.c` + `.h`) |
 | 核心逻辑代码 | ~325 行 (anyone_can_pay.c) + ~224 行 (secp256k1_lock.h) |
 | 测试用例 | 27 个 (14 ACP + 13 secp256k1) |
-| 审计项 | 22 个 |
-| 发现问题 | 4 项 (0 Critical, 0 High, 1 Medium, 2 Low, 1 Info) |
+| 审计项 | 30 个 (含 8 项 RFC-0026 合规性检查) |
+| 发现问题 | 5 项 (0 Critical, 0 High, 1 Medium, 2 Low, 2 Info) |
 
 ### 审计特别说明
 > **已移除内存对齐检查项**：根据审计要求，CKB RISC-V VM 通过软件模拟处理非对齐内存访问，内存对齐不构成安全风险，故本次审计中移除了所有内存对齐相关的检查项。
@@ -43,7 +54,7 @@ anyone-can-pay 是 CKB（Nervos Network）上的一个 Lock Script，实现了"�
 | 🟠 High | 0 | 无高风险问题 |
 | 🟡 Medium | 1 | 业务逻辑设计需关注 |
 | 🟢 Low | 2 | 改进建议 |
-| ℹ️ Info | 1 | 信息性建议 |
+| ℹ️ Info | 2 | 信息性建议 |
 
 **整体评价：该合约代码质量较高，核心逻辑清晰，安全防护措施完善。未发现可直接利用的严重安全漏洞。以下发现主要为设计层面的建议和潜在风险提示。**
 
@@ -61,7 +72,7 @@ anyone-can-pay 是 CKB（Nervos Network）上的一个 Lock Script，实现了"�
 | **严重级别** | 🟡 Medium |
 | **类型** | 业务逻辑 |
 | **影响范围** | 支付路径解锁逻辑 |
-| **关联审计项** | AUDIT-LOGIC-001 |
+| **关联审计项** | AUDIT-LOGIC-001, AUDIT-SPEC-007 |
 
 #### 描述
 
@@ -72,6 +83,8 @@ anyone-can-pay 是 CKB（Nervos Network）上的一个 Lock Script，实现了"�
 - **不需要同时满足两个条件**
 
 虽然该逻辑包含了防盗保护（未满足条件的币种金额必须保持不变），但 OR 语义可能与用户（cell 所有者）的预期不符。
+
+> **RFC-0026 合规性说明**：RFC-0026 规则 2.g 明确规定 "Note only one minimum needs to be matched if both CKByte minimum and UDT minimum are set"，因此 OR 逻辑是**符合规范**的设计决策，而非实现错误。代码中注释 `fail if can't meet both conditions` 与 RFC 和实际逻辑不一致。
 
 #### 关键代码引用
 
@@ -279,24 +292,136 @@ CKB VM 默认栈空间为 4 MB，当前使用量在安全范围内，但签名�
 
 ---
 
-## 4. 审计覆盖矩阵
+### FINDING-005: 实现与 RFC-0026 规则检查顺序不一致（不影响安全性）
+
+| 属性 | 详情 |
+|------|------|
+| **ID** | FINDING-005 |
+| **严重级别** | ℹ️ Info |
+| **类型** | 规范一致性 |
+| **影响范围** | RFC-0026 规则 2.a / 2.b 的检查顺序 |
+| **关联审计项** | AUDIT-SPEC-002, AUDIT-SPEC-003 |
+
+#### 描述
+
+RFC-0026 规定了明确的检查顺序：先独立检查输入/输出中的 type script 重复性（规则 2.a、2.b），再进行配对（规则 2.e）。但实际代码将重复性检查融合在配对过程中，通过计数器（`found_inputs`、`output_cnt`）间接实现。
+
+#### RFC 规定的检查顺序
+```
+2.a → 独立扫描 inputs，检查 type script 重复
+2.b → 独立扫描 outputs，检查 type script 重复
+2.c → 检查无 type 但有 data 的 cell
+2.d → 检查有 type 但 data < 16 字节的 cell
+2.e → 按 type script 配对 input-output
+2.f → 检查金额不减少
+2.g → 检查最低增加量
+```
+
+#### 实际代码的检查顺序
+```
+1. 加载所有 group inputs（同时执行 2.c、2.d 检查）
+2. 遍历所有 outputs：
+   a. 检查 lock hash 匹配
+   b. 加载 output 数据（同时执行 2.c、2.d 检查）
+   c. 在 inputs 中搜索匹配的 type hash（隐含 2.a、2.b 检查）
+   d. 检查金额条件（合并 2.f、2.g）
+3. 最终验证所有 inputs 都有配对（2.e 的另一半）
+```
+
+#### 影响分析
+
+| 场景 | RFC 预期错误 | 实际返回错误 | 交易是否被拒绝 |
+|------|------------|------------|-------------|
+| 2 个 inputs 相同 type + 1 个 output 匹配 | ERROR (规则 2.a) | ERROR_DUPLICATED_INPUTS | ✅ 是 |
+| 2 个 inputs 相同 type + 0 个 output 匹配 | ERROR (规则 2.a) | ERROR_NO_PAIR | ✅ 是 |
+| 2 个 outputs 相同 type + 1 个 input 匹配 | ERROR (规则 2.b) | ERROR_DUPLICATED_OUTPUTS | ✅ 是 |
+| 正常 1:1 配对 | SUCCESS | SUCCESS | ✅ 一致 |
+
+**所有非法交易均被正确拒绝，仅返回的错误码可能不同。不影响安全性。**
+
+#### 修复建议
+
+1. **[信息]** 当前实现功能等价于 RFC 规范，无安全风险
+2. **[可选]** 如需严格遵循 RFC 检查顺序，可在配对前增加独立的重复性预检查
+
+---
+
+## 3.5 RFC-0026 合规性分析
+
+> 参考规范：[RFC-0026: Anyone-Can-Pay Lock](https://github.com/nervosnetwork/rfcs/blob/master/rfcs/0026-anyone-can-pay/0026-anyone-can-pay.md)
+
+### 逐条合规性检查
+
+#### Script Structure（脚本结构）
+
+| RFC 要求 | 代码实现 | 合规状态 |
+|---------|---------|---------|
+| args 格式：`<20 byte pubkey hash>` | `args_bytes_seg.size >= BLAKE160_SIZE(20)` | ✅ 合规 |
+| args 格式：`<20 byte> <1 byte CKB min>` | `args_bytes_seg.size <= BLAKE160_SIZE + 2` | ✅ 合规 |
+| args 格式：`<20 byte> <1 byte CKB min> <1 byte UDT min>` | 同上，最大 22 字节 | ✅ 合规 |
+| 最低金额解释为 `10^x` | `quick_pow10(x, min_ckb_amount)` 查表法 | ✅ 合规 |
+| 默认最低金额为 0 | `*min_ckb_amount = 0; *min_udt_amount = 0;` | ✅ 合规 |
+
+#### UDT Interpretation（UDT 解释）
+
+| RFC 要求 | 代码实现 | 合规状态 |
+|---------|---------|---------|
+| 有 type script 的 cell 至少 16 字节 data | `len < UDT_LEN(16)` → ERROR_ENCODING | ✅ 合规 |
+| 遵循 Simple UDT 规范 | 读取前 16 字节作为 uint128 金额 | ✅ 合规 |
+
+#### Unlock Rules（解锁规则）
+
+| RFC 规则 | 描述 | 代码实现 | 合规状态 |
+|---------|------|---------|---------|
+| **规则 1** | 有签名时，按标准 secp256k1-blake2b-sighash-all 验证 | `verify_secp256k1_blake160_sighash_all_with_witness()` | ✅ 合规 |
+| **规则 1.a** | 签名验证失败则返回错误 | 签名验证失败返回 `ERROR_SECP_*` / `ERROR_PUBKEY_BLAKE160_HASH` | ✅ 合规 |
+| **规则 2** | 无签名时进入支付逻辑 | `has_sig` 判断路径分叉 | ✅ 合规 |
+| **规则 2.a** | 同一 lock 的 inputs 中不允许重复 type script | 通过 `found_inputs > 1` → ERROR_DUPLICATED_INPUTS 间接实现 | ⚠️ 功能等价（见 FINDING-005） |
+| **规则 2.b** | 同一 lock 的 outputs 中不允许重复 type script | 通过 `output_cnt > 1` → ERROR_DUPLICATED_OUTPUTS 间接实现 | ⚠️ 功能等价（见 FINDING-005） |
+| **规则 2.c** | 无 type script 但有 data 的 cell 应返回错误 | `is_ckb_only && len != 0` → ERROR_ENCODING | ✅ 合规 |
+| **规则 2.d** | 有 type script 但 data < 16 字节应返回错误 | `!is_ckb_only && len < UDT_LEN` → ERROR_ENCODING | ✅ 合规 |
+| **规则 2.e** | 按 type script 配对 input-output，未配对则错误 | `found_inputs == 0` → ERROR_NO_PAIR; `output_cnt == 0` → ERROR_NO_PAIR | ✅ 合规 |
+| **规则 2.f** | 输出 CKB/UDT 不能低于输入 | `!meet_cond && amount != input_amount` → ERROR | ✅ 合规 |
+| **规则 2.g** | 设置了最低金额时，至少满足 CKB 或 UDT 之一的最低增加量 | `!(meet_ckb_cond \|\| meet_udt_cond)` → ERROR（OR 逻辑） | ✅ 合规 |
+
+#### 防拆分/合并设计意图
+
+| RFC 设计意图 | 代码实现 | 合规状态 |
+|-------------|---------|---------|
+| 禁止非所有者合并 cell | `found_inputs > 1` → ERROR_DUPLICATED_INPUTS | ✅ 合规 |
+| 禁止非所有者拆分 cell | `output_cnt > 1` → ERROR_DUPLICATED_OUTPUTS | ✅ 合规 |
+| 所有者通过签名可任意操作 | 签名路径无支付限制 | ✅ 合规 |
+
+### 合规性总结
+
+| 维度 | 检查项数 | 完全合规 | 功能等价 | 不合规 |
+|------|---------|---------|---------|-------|
+| Script Structure | 5 | 5 | 0 | 0 |
+| UDT Interpretation | 2 | 2 | 0 | 0 |
+| Unlock Rules | 11 | 9 | 2 | 0 |
+| 防拆分/合并 | 3 | 3 | 0 | 0 |
+| **总计** | **21** | **19** | **2** | **0** |
+
+**结论：代码实现与 RFC-0026 完全合规。2 项"功能等价"差异仅涉及检查顺序和错误码，所有非法交易均被正确拒绝，不影响安全性。**
+
+---
 
 ### 函数/模块 × 审计维度
 
-| 函数/模块 | 输入验证 | 密码学 | 业务逻辑 | 内存安全 | 序列化 | 错误处理 |
-|-----------|---------|--------|---------|---------|--------|---------|
-| `main()` | ✅ | - | ✅ | ✅ | - | ✅ |
-| `read_args()` | ✅ | - | ✅ | ✅ | ✅ | ✅ |
-| `load_type_hash_and_amount()` | ✅ | - | ✅ | ✅ | - | ✅ |
-| `check_payment_unlock()` | ✅ | - | ✅ ⚠️ | ✅ | - | ✅ ⚠️ |
-| `extract_witness_lock()` | ✅ | - | - | ✅ | ✅ | ✅ |
-| `load_secp256k1_first_witness_and_check_signature()` | ✅ | ✅ | ✅ ⚠️ | ✅ | ✅ | ✅ |
-| `verify_secp256k1_blake160_sighash_all_with_witness()` | ✅ | ✅ | ✅ | ✅ ⚠️ | ✅ | ✅ |
-| `uint64_overflow_add()` | - | - | ✅ | ✅ | - | - |
-| `uint128_overflow_add()` | - | - | ✅ | ✅ | - | - |
-| `quick_pow10()` | ✅ | - | ✅ | ✅ | - | - |
-| `uint128_quick_pow10()` | ✅ | - | ✅ | ✅ | - | - |
-| `ckb_secp256k1_custom_verify_only_initialize()` | ✅ | ✅ | - | ✅ | - | ✅ |
+| 函数/模块 | 输入验证 | 密码学 | 业务逻辑 | 内存安全 | 序列化 | 错误处理 | RFC合规 |
+|-----------|---------|--------|---------|---------|--------|---------|--------|
+| `main()` | ✅ | - | ✅ | ✅ | - | ✅ | ✅ |
+| `read_args()` | ✅ | - | ✅ | ✅ | ✅ | ✅ | ✅ |
+| `load_type_hash_and_amount()` | ✅ | - | ✅ | ✅ | - | ✅ | ✅ |
+| `check_payment_unlock()` | ✅ | - | ✅ ⚠️ | ✅ | - | ✅ ⚠️ | ✅ ⚠️ |
+| `extract_witness_lock()` | ✅ | - | - | ✅ | ✅ | ✅ | - |
+| `load_secp256k1_first_witness_and_check_signature()` | ✅ | ✅ | ✅ ⚠️ | ✅ | ✅ | ✅ | ✅ |
+| `verify_secp256k1_blake160_sighash_all_with_witness()` | ✅ | ✅ | ✅ | ✅ ⚠️ | ✅ | ✅ | ✅ |
+| `uint64_overflow_add()` | - | - | ✅ | ✅ | - | - | - |
+| `uint128_overflow_add()` | - | - | ✅ | ✅ | - | - | - |
+| `quick_pow10()` | ✅ | - | ✅ | ✅ | - | - | ✅ |
+| `uint128_quick_pow10()` | ✅ | - | ✅ | ✅ | - | - | ✅ |
+| `ckb_secp256k1_custom_verify_only_initialize()` | ✅ | ✅ | - | ✅ | - | ✅ | - |
 
 图例：✅ 已审计通过 | ⚠️ 已审计，有建议 | - 不适用
 
@@ -544,6 +669,14 @@ main()
 | 20 | witness 歧义防护 | ✅ PASS | 有专项测试覆盖 |
 | 21 | 路径选择安全 | ⚠️ NOTE | 可控但两路径均安全 |
 | 22 | 最低金额溢出处理 | ✅ PASS | 溢出时设为 MAX 值 |
+| 23 | RFC args 格式合规 | ✅ PASS | 20-22 字节，10^x 解释 |
+| 24 | RFC 签名解锁合规 | ✅ PASS | 标准 sighash_all |
+| 25 | RFC 规则 2.a/2.b 重复检查 | ⚠️ NOTE | 功能等价，顺序不同 |
+| 26 | RFC 规则 2.c/2.d 数据验证 | ✅ PASS | 完全合规 |
+| 27 | RFC 规则 2.e 配对逻辑 | ✅ PASS | 完全合规 |
+| 28 | RFC 规则 2.f 金额不减少 | ✅ PASS | 完全合规 |
+| 29 | RFC 规则 2.g 最低增加量 | ✅ PASS | OR 逻辑合规 |
+| 30 | RFC 防拆分/合并设计 | ✅ PASS | 完全合规 |
 
 ---
 
@@ -561,11 +694,13 @@ anyone-can-pay 合约代码结构清晰，安全意识良好：
 - ✅ Molecule 序列化/反序列化均有格式验证
 - ✅ 测试覆盖了主要的正常和异常路径
 - ✅ 错误处理完备，无静默忽略的错误
+- ✅ 与 RFC-0026 规范完全合规（21 项检查，19 项完全合规，2 项功能等价）
 
 **关注点：**
-- ⚠️ CKB/UDT 最低金额的 OR 语义需要用户充分理解
+- ⚠️ CKB/UDT 最低金额的 OR 语义需要用户充分理解（此为 RFC 设计，非代码缺陷）
 - ⚠️ 签名路径栈使用量较大（但在 VM 限制内）
 - ⚠️ 测试覆盖存在若干盲区（混合类型、边界值、复合条件）
+- ⚠️ RFC 规则 2.a/2.b 的检查顺序与规范不一致（不影响安全性）
 
 **未发现可直接利用的安全漏洞。所有发现均为设计层面的建议或低风险提示。**
 

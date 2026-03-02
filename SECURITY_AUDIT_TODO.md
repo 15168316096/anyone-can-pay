@@ -1,17 +1,18 @@
 # anyone-can-pay 安全审计 TODO
 
-> 版本: v1 | 最后更新: 2026-03-02 | 状态: 已完成
+> 版本: v2 | 最后更新: 2026-03-02 | 状态: 已完成
 
 ## 项目概况
   - 语言: C (合约核心逻辑) + Rust (构建/测试)
   - 类型: CKB 智能合约 (Lock Script)
+  - 参考规范: [RFC-0026: Anyone-Can-Pay Lock](https://github.com/nervosnetwork/rfcs/blob/master/rfcs/0026-anyone-can-pay/0026-anyone-can-pay.md)
   - 依赖数: 2 个 C 子模块 (ckb-c-stdlib, secp256k1) + 若干 Rust crate
   - 源文件数: 8 个 C 头文件/源文件 + 3 个 Rust 测试文件
   - 现有测试数: 27 个 (14 个 anyone-can-pay 测试 + 13 个 secp256k1 兼容性测试)
 
 ## 审计进度
-  - 总 TODO 项: 22
-  - ✅ 已完成: 22 | ❌ 发现问题: 4 | ⏳ 待审计: 0
+  - 总 TODO 项: 30
+  - ✅ 已完成: 30 | ❌ 发现问题: 5 | ⏳ 待审计: 0
 
 ---
 
@@ -211,6 +212,78 @@
 
 ---
 
+## 第 8 章: DIM-SPEC RFC-0026 规范一致性
+
+> 参考: [RFC-0026: Anyone-Can-Pay Lock](https://github.com/nervosnetwork/rfcs/blob/master/rfcs/0026-anyone-can-pay/0026-anyone-can-pay.md)
+
+- [x] 🔴 **AUDIT-SPEC-001**: Script args 格式合规性
+  - **关联代码**: c/anyone_can_pay.c:read_args:249-296
+  - **审计内容**:
+    - args 格式是否支持 RFC 定义的 3 种格式（20/21/22 字节）
+    - 最低金额 `10^x` 解释是否正确
+    - 默认值（无 minimum 参数时）是否为 0
+  - **RFC 条目**: Script Structure
+  - **发现记录**: ✅ 完全合规。支持 20-22 字节 args，quick_pow10 正确实现 10^x，默认值为 0。
+
+- [x] 🔴 **AUDIT-SPEC-002**: 规则 2.a — Input 唯一性检查
+  - **关联代码**: c/anyone_can_pay.c:check_payment_unlock:180-225
+  - **审计内容**:
+    - 同一 lock 下的 inputs 是否禁止出现重复 type script
+    - 无 type script 的 inputs 是否也禁止重复
+  - **RFC 条目**: Unlock Rule 2.a
+  - **发现记录**: ⚠️ 功能等价。代码未在配对前独立检查 input 重复性，而是通过配对过程中的 `found_inputs > 1` 间接检测。结果等价但错误码可能不同。详见 FINDING-005。
+
+- [x] 🔴 **AUDIT-SPEC-003**: 规则 2.b — Output 唯一性检查
+  - **关联代码**: c/anyone_can_pay.c:check_payment_unlock:180-225
+  - **审计内容**:
+    - 同一 lock 下的 outputs 是否禁止出现重复 type script
+    - 无 type script 的 outputs 是否也禁止重复
+  - **RFC 条目**: Unlock Rule 2.b
+  - **发现记录**: ⚠️ 功能等价。通过 `output_cnt > 1` 间接检测，结果等价。详见 FINDING-005。
+
+- [x] 🔴 **AUDIT-SPEC-004**: 规则 2.c/2.d — Cell data 验证
+  - **关联代码**: c/anyone_can_pay.c:load_type_hash_and_amount:89-99
+  - **审计内容**:
+    - 无 type script + 有 data → 是否拒绝
+    - 有 type script + data < 16 字节 → 是否拒绝
+  - **RFC 条目**: Unlock Rule 2.c, 2.d
+  - **发现记录**: ✅ 完全合规。`is_ckb_only && len != 0` → ERROR_ENCODING；`!is_ckb_only && len < UDT_LEN` → ERROR_ENCODING。
+
+- [x] 🔴 **AUDIT-SPEC-005**: 规则 2.e — 配对逻辑
+  - **关联代码**: c/anyone_can_pay.c:check_payment_unlock:226-244
+  - **审计内容**:
+    - Input-output 按 type script 配对
+    - 未配对的 input 或 output → 是否报错
+  - **RFC 条目**: Unlock Rule 2.e
+  - **发现记录**: ✅ 完全合规。`found_inputs == 0` → ERROR_NO_PAIR；`output_cnt == 0` → ERROR_NO_PAIR。
+
+- [x] 🔴 **AUDIT-SPEC-006**: 规则 2.f — 金额不减少验证
+  - **关联代码**: c/anyone_can_pay.c:check_payment_unlock:194-214
+  - **审计内容**:
+    - 输出 CKB 是否 >= 输入 CKB
+    - 输出 UDT 是否 >= 输入 UDT（当有 type script 时）
+  - **RFC 条目**: Unlock Rule 2.f
+  - **发现记录**: ✅ 完全合规。当条件未满足时，要求金额保持不变 (`amount == input_amount`)，等价于禁止减少。
+
+- [x] 🔴 **AUDIT-SPEC-007**: 规则 2.g — 最低增加量检查（OR 逻辑）
+  - **关联代码**: c/anyone_can_pay.c:check_payment_unlock:194-214
+  - **审计内容**:
+    - 设置 minimum 时，output >= input + minimum
+    - 两个 minimum 同时设置时，满足一个即可（OR 逻辑）
+  - **RFC 条目**: Unlock Rule 2.g — "Note only one minimum needs to be matched if both CKByte minimum and UDT minimum are set."
+  - **发现记录**: ✅ 完全合规。`!(meet_ckb_cond || meet_udt_cond)` 实现 OR 逻辑，与 RFC 一致。
+
+- [x] 🟠 **AUDIT-SPEC-008**: 防拆分/合并设计意图验证
+  - **关联代码**: c/anyone_can_pay.c:check_payment_unlock:217-224, 237-244
+  - **审计内容**:
+    - 是否有效阻止非所有者拆分 cell（1 input → 多 outputs）
+    - 是否有效阻止非所有者合并 cell（多 inputs → 1 output）
+    - 所有者通过签名是否可自由操作
+  - **RFC 条目**: "anyone-can-pay lock script here forbids merging or splitting anyone-can-pay cells from non-owners"
+  - **发现记录**: ✅ 完全合规。`output_cnt > 1` 阻止拆分，`found_inputs > 1` 阻止合并，签名路径无限制。
+
+---
+
 ## 附录 A: 审计执行日志
 | 日期 | 审计项 | 发现摘要 | 状态 |
 |------|--------|---------|------|
@@ -221,6 +294,7 @@
 | 2026-03-02 | AUDIT-SERDE-001 | 序列化验证正确 | ✅ |
 | 2026-03-02 | AUDIT-ERRINFO-001~002 | 发现 1 项错误码建议 | ⚠️ |
 | 2026-03-02 | AUDIT-DEPS-001~002 | 依赖安全 | ✅ |
+| 2026-03-02 | AUDIT-SPEC-001~008 | RFC-0026 合规，2 项功能等价 | ✅ ⚠️ |
 
 ## 附录 B: 新增项跟踪
 | 日期 | 新增项 ID | 来源 | 描述 |
@@ -234,3 +308,4 @@
 | AUDIT-LOGIC-003 | Low | 属设计特性，建议文档补充说明 | 待处理 |
 | AUDIT-MEMORY-001 | Low | 监控栈使用，考虑减少栈上大缓冲区 | 待处理 |
 | AUDIT-ERRINFO-001 | Info | 考虑统一错误码以减少信息泄露 | 待处理 |
+| AUDIT-SPEC-002/003 | Info | 规则 2.a/2.b 检查顺序与 RFC 不同（功能等价） | 可选改进 |
